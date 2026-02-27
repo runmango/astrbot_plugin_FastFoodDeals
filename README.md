@@ -16,6 +16,16 @@
 
 ---
 
+## 🤖 AstrBot 行为说明
+
+- 插件以 AstrBot `Star` 插件形式运行，通过 `@register` 装饰器注册，ID 为 `fastfood_deals`，作者为 `枫雪`。
+- 插件加载时会读取 `_conf_schema.json` 生成的配置（包含 `target_groups`、`target_brands`、`schedule_time`），并在内部分配给实例字段。
+- 启动后会在内部创建一个全局 `AsyncIOScheduler`，根据配置的 `schedule_time` 注册每日定时任务，定时拉取当日优惠并向指定 QQ 群主动推送海报。
+- 在对话中收到 `/快餐早报` 指令时，会通过 AstrBot 的 `filter.command` 机制触发命令 Handler，立即执行一次完整的“拉取数据 → 生成海报 → 回复文本 + 图片”流程。
+- 所有消息发送均通过 AstrBot 的 `MessageChain` 与 `context.send_message` 完成，仅使用固定文案和本地图像，不调用任何大模型或 Agent 能力。
+
+---
+
 ## 🧱 插件结构
 
 ```text
@@ -28,6 +38,12 @@ FastFoodDeals/
 └─ docx/
    └─ FastFoodDeals使用说明.md  # 详细中文说明，可转为 .docx
 ```
+
+---
+
+## 🌐 仓库地址
+
+- GitHub：`https://github.com/runmango/astrbot_plugin_FastFoodDeals`
 
 ---
 

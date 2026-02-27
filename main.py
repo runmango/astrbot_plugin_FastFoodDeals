@@ -433,10 +433,10 @@ async def generate_poster(
 
 @register(
     "fastfood_deals",
-    "YourName",
+    "枫雪",
     "每日快餐优惠比价早报插件（FastFoodDeals）",
     "1.0.0",
-    "https://example.com/fastfood_deals",
+    "https://github.com/runmango/astrbot_plugin_FastFoodDeals",
 )
 class FastFoodDeals(Star):
     """
