@@ -75,10 +75,21 @@ def _build_group_origin(group_id: str) -> str:
 
 async def fetch_today_deals(target_brands: List[str]) -> List[Dict[str, Any]]:
     """
-    模拟获取今日快餐优惠数据的异步函数。
+    模拟获取“今日快餐菜单与活动”数据的异步函数。
 
-    后续你可以将这里替换为真实的数据源（例如：爬取「什么值得买」、
+    后续你可以将这里替换为真实的数据源（例如：爬取各品牌小程序菜单、
     请求你的内部接口等），只需要保证返回结构保持一致即可。
+
+    每条记录代表一个商品或一个套餐：
+    - brand: 品牌名称
+    - title: 商品名称
+    - category: 分类（新品推荐 / 人气热卖 / 早餐套餐 / 多人分享等）
+    - price: 今日售价
+    - origin_price: 参考原价（可选）
+    - tag: 角标标签（新品上市 / 限时 / 热卖等）
+    - activity: 活动说明（时间区间 / 买赠 / 第二份半价等）
+    - desc: 卖点文案
+    - main_image_url: 商品主图 URL（当前布局只做占位，后续可接真实图片）
     """
     if not target_brands:
         target_brands = ["肯德基", "麦当劳", "德克士"]
@@ -86,47 +97,54 @@ async def fetch_today_deals(target_brands: List[str]) -> List[Dict[str, Any]]:
     today_str = datetime.now().strftime("%Y-%m-%d")
     deals: List[Dict[str, Any]] = []
 
-    # 这里简单构造几条 Mock 数据，方便后续接入真实接口时对齐字段
+    # 为示例构造 3 个商品模板，实际接入时可以任意多条
     base_presets = [
         {
-            "title": "早餐超值双人套餐",
-            "original_price": 32.0,
-            "final_price": 19.9,
-            "recommendation": "适合两人早餐搭配，性价比高。",
+            "title": "熔岩蛋包汁汁和牛堡套餐",
+            "category": "新品推荐",
+            "price": 32.9,
+            "origin_price": 36.0,
+            "tag": "新品上市",
+            "activity": "2月24日-3月22日：新品尝鲜限时优惠",
+            "desc": "软嫩滑蛋，轻薄蛋皮，120g 厚制和牛，口感多汁饱满。",
         },
         {
-            "title": "午餐精选堡+饮料",
-            "original_price": 36.0,
-            "final_price": 22.9,
-            "recommendation": "工作日午餐刚刚好，饱腹又不贵。",
+            "title": "人气经典鸡腿堡+薯条+饮料",
+            "category": "人气热卖",
+            "price": 29.9,
+            "origin_price": 35.0,
+            "tag": "人气热卖",
+            "activity": "午市时段任选第二份半价，限堂食或外带。",
+            "desc": "经典脆皮鸡腿堡搭配金黄薯条与冰爽气泡饮，工作日午餐优选。",
         },
         {
-            "title": "家庭分享桶",
-            "original_price": 89.0,
-            "final_price": 59.9,
-            "recommendation": "三四人聚餐首选，适合聚会分享。",
+            "title": "三人分享桶（鸡翅+鸡块+薯条）",
+            "category": "多人分享",
+            "price": 79.0,
+            "origin_price": 96.0,
+            "tag": "聚会必点",
+            "activity": "周末及节假日限时加赠中份薯条一份。",
+            "desc": "适合三五好友小聚，丰富搭配，一桶搞定多种口味。",
         },
     ]
 
-    for idx, brand in enumerate(target_brands):
-        preset = base_presets[idx % len(base_presets)]
-        discount_percent = round(
-            (1 - preset["final_price"] / preset["original_price"]) * 100,
-            1,
-        )
-        deals.append(
-            {
-                "date": today_str,
-                "brand": brand,
-                "title": preset["title"],
-                "original_price": preset["original_price"],
-                "final_price": preset["final_price"],
-                "discount_percent": discount_percent,
-                # 商品主图 URL：仅作为展示字段，当前示例不强依赖真实图片
-                "main_image_url": f"https://example.com/{brand}/deal_{idx}.jpg",
-                "recommendation": preset["recommendation"],
-            },
-        )
+    for brand in target_brands:
+        for idx, preset in enumerate(base_presets):
+            deals.append(
+                {
+                    "date": today_str,
+                    "brand": brand,
+                    "title": preset["title"],
+                    "category": preset["category"],
+                    "price": preset["price"],
+                    "origin_price": preset["origin_price"],
+                    "tag": preset["tag"],
+                    "activity": preset["activity"],
+                    "desc": preset["desc"],
+                    # 商品主图 URL：仅作为展示字段，当前示例不强依赖真实图片
+                    "main_image_url": f"https://example.com/{brand}/menu_{idx}.jpg",
+                },
+            )
 
     return deals
 
@@ -163,7 +181,7 @@ THEME_CONFIG: Dict[str, Dict[str, Any]] = {
     "crazy_thursday": {
         "header_color": "#e4002b",
         "header_subtitle_color": "#ffd700",
-        "title_text": "疯狂星期四 · 今日快餐比价早报",
+        "title_text": "疯狂星期四 · 今日快餐菜单与活动早报",
         "card_accent": "#e4002b",
         "card_placeholder_fill": "#ffe6e6",
         "card_placeholder_outline": "#e4002b",
@@ -175,7 +193,7 @@ THEME_CONFIG: Dict[str, Dict[str, Any]] = {
 DEFAULT_THEME = {
     "header_color": "#ff6b3b",
     "header_subtitle_color": "#ffe7d9",
-    "title_text": "今日快餐比价早报",
+    "title_text": "今日快餐菜单与活动早报",
     "card_accent": "#ff6b3b",
     "card_placeholder_fill": "#ffe9dd",
     "card_placeholder_outline": "#ffb89b",
@@ -292,12 +310,6 @@ def _generate_poster_sync(
     card_height = 260
     card_gap = 30
 
-    # 找出最划算的优惠（按 final_price 从低到高）
-    best_deal_brand: Optional[str] = None
-    if deals:
-        sorted_deals = sorted(deals, key=lambda d: d.get("final_price", 9999))
-        best_deal_brand = sorted_deals[0].get("brand")
-
     for idx, deal in enumerate(deals):
         if y + card_height + 40 > height:
             # 内容太多则不再绘制，避免溢出
@@ -340,79 +352,93 @@ def _generate_poster_sync(
         text_x = img_box_right + 40
         text_y = card_top + 40
 
-        title = str(deal.get("title", "今日主推套餐"))
-        draw.text((text_x, text_y), f"{brand} | {title}", font=subtitle_font, fill="#333333")
+        title = str(deal.get("title", "今日主推新品"))
+        category = str(deal.get("category", "今日推荐"))
+        tag = str(deal.get("tag", "")).strip()
+        activity = str(deal.get("activity", "")).strip()
+        desc = str(deal.get("desc", "")).strip()
+
+        # 第一行：分类 + 商品名
+        draw.text(
+            (text_x, text_y),
+            f"{category} | {title}",
+            font=subtitle_font,
+            fill="#333333",
+        )
+
+        # 标签角标（如“新品上市”）
+        if tag:
+            tag_text = tag
+            tag_w, tag_h = _text_size(draw, tag_text, body_font)
+            tag_padding_x = 16
+            tag_padding_y = 8
+            tag_left = width - margin_x - tag_w - tag_padding_x * 2
+            tag_top = text_y - 6
+            tag_right = width - margin_x
+            tag_bottom = tag_top + tag_h + tag_padding_y * 2
+            draw.rounded_rectangle(
+                [(tag_left, tag_top), (tag_right, tag_bottom)],
+                radius=16,
+                fill=card_accent,
+            )
+            draw.text(
+                (tag_left + tag_padding_x, tag_top + tag_padding_y),
+                tag_text,
+                font=body_font,
+                fill="#ffffff",
+            )
 
         # 价格信息
-        original_price = float(deal.get("original_price", 0.0))
-        final_price = float(deal.get("final_price", 0.0))
-        discount_percent = float(deal.get("discount_percent", 0.0))
+        price = float(deal.get("price", 0.0))
+        origin_price = deal.get("origin_price")
 
         price_y = text_y + 70
         draw.text(
             (text_x, price_y),
-            f"原价：¥{original_price:.1f}",
-            font=body_font,
-            fill="#999999",
-        )
-
-        # 原价中间画删除线
-        op_text = f"原价：¥{original_price:.1f}"
-        op_w, op_h = _text_size(draw, op_text, body_font)
-        draw.line(
-            [(text_x, price_y + op_h // 2), (text_x + op_w, price_y + op_h // 2)],
-            fill="#bbbbbb",
-            width=2,
-        )
-
-        final_y = price_y + 50
-        draw.text(
-            (text_x, final_y),
-            f"到手价：¥{final_price:.1f}",
+            f"今日价：¥{price:.1f}",
             font=price_font,
             fill="#ff3b30",
         )
 
-        discount_y = final_y + 60
-        draw.text(
-            (text_x, discount_y),
-            f"优惠力度：约 {discount_percent:.1f}%",
-            font=body_font,
-            fill=card_accent,
-        )
-
-        # 推荐语
-        recommend = str(deal.get("recommendation", "适合作为今日的实惠之选。"))
-        rec_y = discount_y + 40
-        draw.text(
-            (text_x, rec_y),
-            f"建议：{recommend}",
-            font=body_font,
-            fill="#555555",
-        )
-
-        # 最划算高亮标记
-        if best_deal_brand and brand == best_deal_brand:
-            badge_text = "今日最划算"
-            badge_w, badge_h = _text_size(draw, badge_text, body_font)
-            badge_padding_x = 18
-            badge_padding_y = 10
-            badge_left = width - margin_x - badge_w - badge_padding_x * 2
-            badge_top = card_top + 26
-            badge_right = width - margin_x - 26
-            badge_bottom = badge_top + badge_h + badge_padding_y * 2
-            b_fill = cfg.get("badge_fill", "#ffdd55")
-            b_text_color = cfg.get("badge_text_color", "#7a4b00")
-            draw.rounded_rectangle(
-                [(badge_left, badge_top), (badge_right, badge_bottom)],
-                radius=18,
-                fill=b_fill,
-            )
+        # 原价（可选）
+        if origin_price is not None:
+            op_text = f"原价 ¥{float(origin_price):.1f}"
+            op_w, op_h = _text_size(draw, op_text, body_font)
+            op_x = text_x
+            op_y = price_y + 50
             draw.text(
-                (badge_left + badge_padding_x, badge_top + badge_padding_y),
-                badge_text,
+                (op_x, op_y),
+                op_text,
                 font=body_font,
-                fill=b_text_color,
+                fill="#999999",
+            )
+            # 原价中间画删除线
+            draw.line(
+                [(op_x, op_y + op_h // 2), (op_x + op_w, op_y + op_h // 2)],
+                fill="#bbbbbb",
+                width=2,
+            )
+            next_y = op_y + 40
+        else:
+            next_y = price_y + 50
+
+        # 活动说明
+        if activity:
+            draw.text(
+                (text_x, next_y),
+                activity,
+                font=body_font,
+                fill=card_accent,
+            )
+            next_y += 40
+
+        # 商品卖点说明
+        if desc:
+            draw.text(
+                (text_x, next_y),
+                desc,
+                font=body_font,
+                fill="#555555",
             )
 
         y = card_bottom + card_gap
