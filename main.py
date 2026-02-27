@@ -316,6 +316,8 @@ async def fetch_today_deals(
     if not target_brands:
         target_brands = ["肯德基", "麦当劳", "德克士"]
     source = (data_source or "mock").strip().lower()
+    if source == "res":
+        source = "rss"  # 兼容界面截断或误填
 
     if source == "rss":
         urls = rss_urls or []
@@ -693,7 +695,7 @@ async def generate_poster(
     "fastfood_deals",
     "枫雪",
     "每日快餐优惠比价早报插件（FastFoodDeals）",
-    "1.0.0",
+    "1.0.1",
     "https://github.com/runmango/astrbot_plugin_FastFoodDeals",
 )
 class FastFoodDeals(Star):
@@ -715,7 +717,8 @@ class FastFoodDeals(Star):
         self.target_groups: List[str] = list(self.config.get("target_groups", []))
         self.target_brands: List[str] = list(self.config.get("target_brands", []))
         self.schedule_time: str = str(self.config.get("schedule_time", "08:00"))
-        self.data_source: str = str(self.config.get("data_source", "mock")).strip().lower()
+        _ds = str(self.config.get("data_source", "mock")).strip().lower()
+        self.data_source: str = "rss" if _ds == "res" else _ds  # 兼容界面截断或误填
         self.rss_urls: List[str] = list(self.config.get("rss_urls", []))
         self.api_url: str = str(self.config.get("api_url", "")).strip()
         self.api_method: str = str(self.config.get("api_method", "get")).strip().lower()

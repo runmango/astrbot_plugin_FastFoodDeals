@@ -1,35 +1,35 @@
 {
   "target_groups": {
-    "description": "需要推送的 QQ 群聊号列表，例如 [\"123456789\"]",
+    "description": "推送目标 QQ 群号列表",
     "type": "list",
     "items": {"type": "string"},
     "default": []
   },
   "target_brands": {
-    "description": "需要监控的快餐品牌，例如 [\"肯德基\", \"麦当劳\", \"德克士\"]",
+    "description": "监控的快餐品牌（如肯德基、麦当劳、德克士）",
     "type": "list",
     "items": {"type": "string"},
     "default": ["肯德基", "麦当劳", "德克士"]
   },
   "schedule_time": {
-    "description": "每天定时发送的时间（24 小时制），例如 \"08:00\"",
+    "description": "每日定时发送时间，24 小时制，如 08:00",
     "type": "string",
     "default": "08:00"
   },
   "data_source": {
-    "description": "数据源类型：mock=内置示例，rss=从 RSS 订阅拉取（如值得买优惠精选），api=从自定义 HTTP API 拉取",
+    "description": "数据源：mock 示例 / rss 订阅 / api 接口",
     "type": "string",
     "default": "mock",
     "enum": ["mock", "rss", "api"]
   },
   "rss_urls": {
-    "description": "RSS 订阅地址列表（data_source 为 rss 时生效），例如 [\"https://feed.smzdm.com/\"]",
+    "description": "RSS 地址列表（data_source 选 rss 时必填）",
     "type": "list",
     "items": {"type": "string"},
     "default": []
   },
   "api_url": {
-    "description": "自定义数据 API 地址（data_source 为 api 时生效），返回 JSON 数组，每项含 brand/title/price 等字段",
+    "description": "数据 API 地址（data_source 选 api 时必填，返回 JSON 数组）",
     "type": "string",
     "default": ""
   },
