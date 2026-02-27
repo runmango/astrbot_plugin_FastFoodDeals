@@ -526,7 +526,9 @@ def _generate_poster_sync(
         # 尝试加载商品主图；失败则回退为品牌简称文字
         img_url = str(deal.get("main_image_url", "")).strip()
         pasted_image = False
-        if img_url.startswith("http"):
+        # 跳过占位 URL（如 Mock 数据的 example.com），避免无意义请求与 SSL 警告
+        is_placeholder = "example.com" in img_url or "example.org" in img_url
+        if img_url.startswith("http") and not is_placeholder:
             try:
                 resp = httpx.get(img_url, timeout=5.0)
                 resp.raise_for_status()
