@@ -132,10 +132,10 @@ async def fetch_today_deals(target_brands: List[str]) -> List[Dict[str, Any]]:
 
 
 def _ensure_directory(path: str) -> None:
-    """确保目录存在。"""
-    directory = os.path.dirname(path)
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory, exist_ok=True)
+    """确保目录存在（支持直接传入目录路径）。"""
+    # 这里假定传入的就是目录路径，而不是文件路径
+    if path and not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)
 
 
 def _text_size(draw, text: str, font) -> Tuple[int, int]:
