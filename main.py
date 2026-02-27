@@ -198,6 +198,10 @@ def _load_font(size: int = 40):
         r"C:\Windows\Fonts\simhei.ttf",
         r"C:\Windows\Fonts\simfang.ttf",
         r"C:\Windows\Fonts\simkai.ttf",
+        # 常见 Linux 中文字体路径（如容器 / 服务器环境）
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
     ]
 
     for path in candidate_paths:
@@ -211,9 +215,18 @@ def _load_font(size: int = 40):
     return ImageFont.load_default()
 
 
+def _sanitize_brand_for_filename(brand: str) -> str:
+    """将品牌名转换为适合文件名的安全字符串。"""
+    if not brand:
+        return "brand"
+    safe = "".join(ch for ch in brand if ch.isalnum())
+    return safe or "brand"
+
+
 def _generate_poster_sync(
     deals: List[Dict[str, Any]],
     theme: Optional[str] = None,
+    brand_name: Optional[str] = None,
 ) -> str:
     """
     使用 Pillow 同步生成“海报级”优惠对比图片。
@@ -226,6 +239,12 @@ def _generate_poster_sync(
     width, height = 1080, 1920
     bg_color = "#f7f7f7"
     cfg = THEME_CONFIG.get(theme, DEFAULT_THEME) if theme else DEFAULT_THEME
+
+    # 品牌名：用于标题 & 文件名
+    if not deals:
+        raise ValueError("deals is empty")
+    if brand_name is None:
+        brand_name = str(deals[0].get("brand", "")).strip() or "快餐品牌"
 
     image = Image.new("RGB", (width, height), bg_color)
 
@@ -258,7 +277,8 @@ def _generate_poster_sync(
     header_subtitle_color = cfg.get("header_subtitle_color", "#ffe7d9")
     draw.rectangle([(0, 0), (width, header_height)], fill=header_color)
 
-    title_text = cfg.get("title_text", "今日快餐比价早报")
+    base_title = cfg.get("title_text", "今日快餐比价早报")
+    title_text = f"{brand_name} · {base_title}"
     today_str = datetime.now().strftime("%Y-%m-%d")
     date_text = f"日期：{today_str}"
 
@@ -412,7 +432,8 @@ def _generate_poster_sync(
     today_str = datetime.now().strftime("%Y%m%d")
     out_dir = os.path.join("data", "fastfood_deals")
     _ensure_directory(out_dir)
-    out_path = os.path.join(out_dir, f"fastfood_deals_{today_str}.png")
+    brand_safe = _sanitize_brand_for_filename(brand_name)
+    out_path = os.path.join(out_dir, f"fastfood_deals_{today_str}_{brand_safe}.png")
     image.save(out_path, format="PNG")
 
     logger.info(f"[FastFoodDeals] Poster generated at: {out_path}")
@@ -422,13 +443,15 @@ def _generate_poster_sync(
 async def generate_poster(
     deals: List[Dict[str, Any]],
     theme: Optional[str] = None,
+    brand_name: Optional[str] = None,
 ) -> str:
     """
     异步封装的海报生成函数。
     内部使用 asyncio.to_thread 调用同步的 Pillow 绘制逻辑，避免阻塞事件循环。
     theme: 特殊活动主题，如 "crazy_thursday"。
+    brand_name: 品牌名称，用于标题与文件名。
     """
-    return await asyncio.to_thread(_generate_poster_sync, deals, theme)
+    return await asyncio.to_thread(_generate_poster_sync, deals, theme, brand_name)
 
 
 @register(
@@ -484,15 +507,35 @@ class FastFoodDeals(Star):
             yield event.plain_result("今日暂无监控到的快餐优惠活动。")
             return
         theme = get_theme_for_today()
-        try:
-            poster_path = await generate_poster(deals, theme=theme)
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"[FastFoodDeals] cmd poster error: {e}")
-            yield event.plain_result("今日快餐优惠海报生成失败，请稍后重试。")
-            return
-        intro = "为您奉上今日快餐优惠货比三家早报，请查阅。"
-        yield event.plain_result(intro)
-        yield event.image_result(poster_path)
+
+        # 按品牌拆分为多张海报：肯德基、麦当劳、德克士等各一张
+        brand_map: Dict[str, List[Dict[str, Any]]] = {}
+        for deal in deals:
+            brand = str(deal.get("brand", "其他品牌")).strip() or "其他品牌"
+            brand_map.setdefault(brand, []).append(deal)
+
+        # 保证按配置顺序输出；未在配置中的品牌放在最后
+        ordered_brands: List[str] = []
+        for b in self.target_brands:
+            if b in brand_map:
+                ordered_brands.append(b)
+        for b in brand_map:
+            if b not in ordered_brands:
+                ordered_brands.append(b)
+
+        for brand in ordered_brands:
+            brand_deals = brand_map.get(brand)
+            if not brand_deals:
+                continue
+            try:
+                poster_path = await generate_poster(brand_deals, theme=theme, brand_name=brand)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"[FastFoodDeals] cmd poster error for {brand}: {e}")
+                yield event.plain_result(f"{brand} 今日快餐优惠海报生成失败，请稍后重试。")
+                continue
+            intro = f"为您奉上 {brand} 今日快餐优惠货比三家早报，请查阅。"
+            yield event.plain_result(intro)
+            yield event.image_result(poster_path)
 
     def _register_daily_job(self) -> None:
         """向全局 Scheduler 注册每日定时任务。"""
@@ -552,19 +595,44 @@ class FastFoodDeals(Star):
             return
 
         theme = get_theme_for_today()
-        try:
-            poster_path = await generate_poster(deals, theme=theme)
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"[FastFoodDeals] Failed to generate poster: {e}")
-            # 海报生成失败时，发送纯文本兜底
-            await self._send_text_to_all(
-                "今日快餐优惠海报生成失败，但数据已获取成功，请稍后在控制台查看日志。",
-            )
-            return
 
-        # 正常情况下发送图片 + 简短专业引导语
-        intro_text = "为您奉上今日快餐优惠货比三家早报，请查阅。"
-        await self._send_image_to_all(poster_path, intro_text)
+        # 按品牌拆分为多张海报
+        brand_map: Dict[str, List[Dict[str, Any]]] = {}
+        for deal in deals:
+            brand = str(deal.get("brand", "其他品牌")).strip() or "其他品牌"
+            brand_map.setdefault(brand, []).append(deal)
+
+        ordered_brands: List[str] = []
+        for b in self.target_brands:
+            if b in brand_map:
+                ordered_brands.append(b)
+        for b in brand_map:
+            if b not in ordered_brands:
+                ordered_brands.append(b)
+
+        any_success = False
+        for brand in ordered_brands:
+            brand_deals = brand_map.get(brand)
+            if not brand_deals:
+                continue
+            try:
+                poster_path = await generate_poster(brand_deals, theme=theme, brand_name=brand)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"[FastFoodDeals] Failed to generate poster for {brand}: {e}")
+                await self._send_text_to_all(
+                    f"{brand} 今日快餐优惠海报生成失败，但数据已获取成功，请稍后在控制台查看日志。",
+                )
+                continue
+
+            intro_text = f"为您奉上 {brand} 今日快餐优惠货比三家早报，请查阅。"
+            await self._send_image_to_all(poster_path, intro_text)
+            any_success = True
+
+        if not any_success:
+            # 所有品牌都生成失败时兜底提示一次
+            await self._send_text_to_all(
+                "今日快餐优惠海报全部生成失败，但数据已获取成功，请稍后在控制台查看日志。",
+            )
 
     async def _send_text_to_all(self, text: str) -> None:
         """向所有配置的群聊发送纯文本消息。"""
