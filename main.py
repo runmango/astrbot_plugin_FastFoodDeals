@@ -107,6 +107,13 @@ def _infer_brand_from_text(text: str, target_brands: List[str]) -> Optional[str]
     return None
 
 
+# 拉取 RSS 时使用浏览器 UA，避免目标站返回 403 或 HTML 错误页
+_RSS_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+}
+
+
 async def _fetch_from_rss(
     rss_urls: List[str],
     target_brands: List[str],
@@ -122,9 +129,14 @@ async def _fetch_from_rss(
     async with httpx.AsyncClient(timeout=15.0) as client:
         for url in (u.strip() for u in rss_urls if u and str(u).strip().startswith("http")):
             try:
-                resp = await client.get(url)
+                resp = await client.get(url, headers=_RSS_HEADERS)
                 resp.raise_for_status()
-                root = ET.fromstring(resp.text)
+                text = resp.text.strip()
+                # 避免把 403/错误页返回的 HTML 当 XML 解析导致 mismatched tag
+                if not text or text.startswith("<!") or ("<html" in text[:200].lower()):
+                    logger.warning(f"[FastFoodDeals] RSS response not XML for {url}, skip")
+                    continue
+                root = ET.fromstring(text)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[FastFoodDeals] RSS fetch failed {url}: {e}")
                 continue
