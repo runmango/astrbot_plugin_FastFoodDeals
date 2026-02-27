@@ -1,0 +1,10 @@
+id: fastfood_deals
+name: FastFoodDeals
+display_name: FastFoodDeals 每日快餐优惠比价早报
+author: YourName
+version: "1.0.0"
+description: "每天定时生成快餐优惠比价海报，并推送到指定 QQ 群。"
+support_platforms:
+  - aiocqhttp
+astrbot_version: ">=4.16,<5"
+
