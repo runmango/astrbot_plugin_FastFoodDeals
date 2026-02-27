@@ -1,5 +1,7 @@
 import asyncio
 import os
+import re
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
@@ -75,31 +77,180 @@ def _build_group_origin(group_id: str) -> str:
     return f"aiocqhttp:group:{group_id}"
 
 
-async def fetch_today_deals(target_brands: List[str]) -> List[Dict[str, Any]]:
+def _extract_price_from_text(text: str) -> Optional[float]:
+    """从文案中尝试提取价格（元），例如 ¥32.9、32.9元、￥19.9。"""
+    if not text:
+        return None
+    # 优先匹配 ¥/￥ 后数字
+    m = re.search(r"[¥￥]\s*(\d+\.?\d*)", text)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            pass
+    m = re.search(r"(\d+\.?\d*)\s*元", text)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            pass
+    return None
+
+
+def _infer_brand_from_text(text: str, target_brands: List[str]) -> Optional[str]:
+    """从标题/描述中根据关键词推断品牌，用于 RSS 条目。"""
+    if not text or not target_brands:
+        return None
+    for brand in target_brands:
+        if brand and brand in text:
+            return brand
+    return None
+
+
+async def _fetch_from_rss(
+    rss_urls: List[str],
+    target_brands: List[str],
+) -> List[Dict[str, Any]]:
     """
-    模拟获取“今日快餐菜单与活动”数据的异步函数。
-
-    后续你可以将这里替换为真实的数据源（例如：爬取各品牌小程序菜单、
-    请求你的内部接口等），只需要保证返回结构保持一致即可。
-
-    每条记录代表一个商品或一个套餐：
-    - brand: 品牌名称
-    - title: 商品名称
-    - category: 分类（新品推荐 / 人气热卖 / 早餐套餐 / 多人分享等）
-    - price: 今日售价
-    - origin_price: 参考原价（可选）
-    - tag: 角标标签（新品上市 / 限时 / 热卖等）
-    - activity: 活动说明（时间区间 / 买赠 / 第二份半价等）
-    - desc: 卖点文案
-    - main_image_url: 商品主图 URL（当前布局只做占位，后续可接真实图片）
+    从 RSS 订阅拉取条目，按 target_brands 关键词过滤并映射为统一 deal 结构。
+    支持 RSS 2.0 与 Atom 常见标签（title, link, description, pubDate 或 updated）。
     """
-    if not target_brands:
-        target_brands = ["肯德基", "麦当劳", "德克士"]
-
     today_str = datetime.now().strftime("%Y-%m-%d")
     deals: List[Dict[str, Any]] = []
+    seen_keys: set = set()  # 去重 (brand, title)
 
-    # 为示例构造 3 个商品模板，实际接入时可以任意多条
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for url in (u.strip() for u in rss_urls if u and str(u).strip().startswith("http")):
+            try:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                root = ET.fromstring(resp.text)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[FastFoodDeals] RSS fetch failed {url}: {e}")
+                continue
+
+            # RSS 2.0: channel/item；Atom: feed/entry
+            items = root.findall(".//item") or root.findall(".//{http://www.w3.org/2005/Atom}entry")
+            for item in items:
+                def _text(tag: str, ns: Optional[str] = None) -> str:
+                    if ns:
+                        el = item.find(f"{{{ns}}}{tag}")
+                    else:
+                        el = item.find(tag) or item.find(f".//*[local-name()='{tag}']")
+                    if el is None:
+                        return ""
+                    if tag == "link" and el.get("href"):
+                        return (el.get("href") or "").strip()
+                    return (el.text or "").strip()
+
+                title = _text("title") or _text("title", "http://www.w3.org/2005/Atom")
+                if not title:
+                    continue
+                link = _text("link") or _text("link", "http://www.w3.org/2005/Atom")
+                desc = _text("description") or _text("summary", "http://www.w3.org/2005/Atom") or title
+                combined = f"{title} {desc}"
+
+                brand = _infer_brand_from_text(combined, target_brands)
+                if not brand:
+                    continue  # 与监控品牌无关则跳过
+
+                price = _extract_price_from_text(combined)
+                if price is None:
+                    price = 0.0
+
+                key = (brand, title[:80])
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+
+                deals.append({
+                    "date": today_str,
+                    "brand": brand,
+                    "title": title[:80],
+                    "category": "RSS 优惠",
+                    "price": price,
+                    "origin_price": None,
+                    "tag": "限时" if "限时" in combined or "促销" in combined else "优惠",
+                    "activity": desc[:120] if desc else "",
+                    "desc": desc[:200] if desc else title,
+                    "main_image_url": "",
+                })
+
+    return deals
+
+
+async def _fetch_from_api(
+    api_url: str,
+    api_method: str,
+    target_brands: List[str],
+) -> List[Dict[str, Any]]:
+    """
+    从自定义 HTTP API 拉取 JSON，期望返回数组，每项可含 brand/title/price/origin_price 等。
+    若 API 返回的字段名不同，可在此做映射。
+    """
+    if not api_url or not api_url.strip().startswith("http"):
+        logger.warning("[FastFoodDeals] api_url 未配置或无效，跳过 API 拉取")
+        return []
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            if (api_method or "get").lower() == "post":
+                resp = await client.post(api_url)
+            else:
+                resp = await client.get(api_url)
+            resp.raise_for_status()
+            raw = resp.json()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[FastFoodDeals] API fetch failed {api_url}: {e}")
+            return []
+
+    if not isinstance(raw, list):
+        raw = raw.get("data", raw.get("deals", [])) if isinstance(raw, dict) else []
+    deals: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        # 兼容多种字段名
+        brand = (item.get("brand") or item.get("品牌") or "").strip()
+        if target_brands and brand not in target_brands:
+            continue
+        if not brand:
+            brand = str(target_brands[0]) if target_brands else "其他"
+        title = str(item.get("title") or item.get("商品") or item.get("name") or "未知商品")
+        price = item.get("price")
+        if price is None:
+            price = item.get("到手价") or item.get("final_price")
+        try:
+            price = float(price) if price is not None else 0.0
+        except (TypeError, ValueError):
+            price = 0.0
+        origin = item.get("origin_price") or item.get("原价") or item.get("original_price")
+        try:
+            origin_price = float(origin) if origin is not None else None
+        except (TypeError, ValueError):
+            origin_price = None
+        deals.append({
+            "date": today_str,
+            "brand": brand,
+            "title": title[:80],
+            "category": str(item.get("category") or item.get("分类") or "优惠"),
+            "price": price,
+            "origin_price": origin_price,
+            "tag": str(item.get("tag") or item.get("标签") or "优惠"),
+            "activity": str(item.get("activity") or item.get("活动") or ""),
+            "desc": str(item.get("desc") or item.get("推荐") or item.get("recommendation") or title),
+            "main_image_url": str(item.get("main_image_url") or item.get("image") or ""),
+        })
+    return deals
+
+
+async def _fetch_mock_deals(target_brands: List[str]) -> List[Dict[str, Any]]:
+    """内置 Mock 数据，用于演示与测试。"""
+    if not target_brands:
+        target_brands = ["肯德基", "麦当劳", "德克士"]
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    deals: List[Dict[str, Any]] = []
     base_presets = [
         {
             "title": "熔岩蛋包汁汁和牛堡套餐",
@@ -129,26 +280,53 @@ async def fetch_today_deals(target_brands: List[str]) -> List[Dict[str, Any]]:
             "desc": "适合三五好友小聚，丰富搭配，一桶搞定多种口味。",
         },
     ]
-
     for brand in target_brands:
         for idx, preset in enumerate(base_presets):
-            deals.append(
-                {
-                    "date": today_str,
-                    "brand": brand,
-                    "title": preset["title"],
-                    "category": preset["category"],
-                    "price": preset["price"],
-                    "origin_price": preset["origin_price"],
-                    "tag": preset["tag"],
-                    "activity": preset["activity"],
-                    "desc": preset["desc"],
-                    # 商品主图 URL：仅作为展示字段，当前示例不强依赖真实图片
-                    "main_image_url": f"https://example.com/{brand}/menu_{idx}.jpg",
-                },
-            )
-
+            deals.append({
+                "date": today_str,
+                "brand": brand,
+                "title": preset["title"],
+                "category": preset["category"],
+                "price": preset["price"],
+                "origin_price": preset["origin_price"],
+                "tag": preset["tag"],
+                "activity": preset["activity"],
+                "desc": preset["desc"],
+                "main_image_url": f"https://example.com/{brand}/menu_{idx}.jpg",
+            })
     return deals
+
+
+async def fetch_today_deals(
+    target_brands: List[str],
+    data_source: str = "mock",
+    rss_urls: Optional[List[str]] = None,
+    api_url: str = "",
+    api_method: str = "get",
+) -> List[Dict[str, Any]]:
+    """
+    获取“今日快餐菜单与活动”数据，数据源由配置决定。
+
+    - data_source=mock：内置示例数据；
+    - data_source=rss：从 rss_urls 拉取（如什么值得买优惠精选），按 target_brands 关键词过滤；
+    - data_source=api：从 api_url 拉取 JSON 数组，字段可映射为 brand/title/price 等。
+
+    返回结构每条：brand, title, category, price, origin_price, tag, activity, desc, main_image_url, date。
+    """
+    if not target_brands:
+        target_brands = ["肯德基", "麦当劳", "德克士"]
+    source = (data_source or "mock").strip().lower()
+
+    if source == "rss":
+        urls = rss_urls or []
+        if urls:
+            return await _fetch_from_rss(urls, target_brands)
+        logger.warning("[FastFoodDeals] data_source=rss 但 rss_urls 为空，回退到 mock")
+    elif source == "api":
+        if api_url and str(api_url).strip().startswith("http"):
+            return await _fetch_from_api(api_url.strip(), api_method or "get", target_brands)
+        logger.warning("[FastFoodDeals] data_source=api 但 api_url 未配置或无效，回退到 mock")
+    return await _fetch_mock_deals(target_brands)
 
 
 def _ensure_directory(path: str) -> None:
@@ -535,15 +713,18 @@ class FastFoodDeals(Star):
         self.target_groups: List[str] = list(self.config.get("target_groups", []))
         self.target_brands: List[str] = list(self.config.get("target_brands", []))
         self.schedule_time: str = str(self.config.get("schedule_time", "08:00"))
+        self.data_source: str = str(self.config.get("data_source", "mock")).strip().lower()
+        self.rss_urls: List[str] = list(self.config.get("rss_urls", []))
+        self.api_url: str = str(self.config.get("api_url", "")).strip()
+        self.api_method: str = str(self.config.get("api_method", "get")).strip().lower()
 
         # 当前插件实例对应的定时任务 ID，便于卸载/重载时清理
         self._job_id: str = f"fastfood_deals_daily_{id(self)}"
 
         logger.info(
             "[FastFoodDeals] Plugin initialized with config: "
-            f"target_groups={self.target_groups}, "
-            f"target_brands={self.target_brands}, "
-            f"schedule_time={self.schedule_time}",
+            f"target_groups={self.target_groups}, target_brands={self.target_brands}, "
+            f"schedule_time={self.schedule_time}, data_source={self.data_source}",
         )
 
         # 注册定时任务
@@ -553,7 +734,13 @@ class FastFoodDeals(Star):
     async def cmd_fastfood_report(self, event: AstrMessageEvent):
         """主动触发：获取今日快餐优惠比价早报并推送到当前会话（执行方式 A）。"""
         try:
-            deals = await fetch_today_deals(self.target_brands)
+            deals = await fetch_today_deals(
+                self.target_brands,
+                data_source=self.data_source,
+                rss_urls=self.rss_urls,
+                api_url=self.api_url,
+                api_method=self.api_method,
+            )
         except Exception as e:  # noqa: BLE001
             logger.error(f"[FastFoodDeals] cmd fetch deals error: {e}")
             yield event.plain_result("今日快餐优惠数据获取失败，请稍后重试。")
@@ -638,7 +825,13 @@ class FastFoodDeals(Star):
             return
 
         try:
-            deals = await fetch_today_deals(self.target_brands)
+            deals = await fetch_today_deals(
+                self.target_brands,
+                data_source=self.data_source,
+                rss_urls=self.rss_urls,
+                api_url=self.api_url,
+                api_method=self.api_method,
+            )
         except Exception as e:  # noqa: BLE001
             logger.error(f"[FastFoodDeals] Failed to fetch deals: {e}")
             await self._send_text_to_all(

@@ -99,20 +99,22 @@
 - 图片发送失败：  
   - 降级为纯文本发送，并提示检查机器人文件读写权限等问题。
 
-## 七、如何接入真实数据源（示例思路）
+## 七、如何准确获取数据源（推荐做法）
 
-1. 在 `main.py` 中找到 `fetch_today_deals` 函数；
-2. 在函数内部使用 `httpx`、`aiohttp` 等异步 HTTP 客户端调用你的真实 API；
-3. 将 API 返回结果映射为当前使用的字段结构：
+插件已支持三种数据源，在 Web 配置中选择即可，无需改代码：
 
-   - `brand`：品牌名称；
-   - `title`：套餐名称或优惠标题；
-   - `original_price` / `final_price`：原价与到手价；
-   - `discount_percent`：折扣百分比，可自行计算；
-   - `main_image_url`：主图地址（可保留占位或用于后续加载真实图片）；
-   - `recommendation`：购买建议文案。
+1. **mock**（默认）：内置示例数据，用于试跑与演示。
+2. **rss**：从 RSS 订阅拉取真实优惠。
+   - 在配置中设置 **data_source** 为 `rss`，**rss_urls** 填写订阅地址，例如：
+     - 什么值得买优惠精选：`https://feed.smzdm.com/`
+   - 插件会按 **target_brands**（肯德基、麦当劳等）在标题/描述中做关键词过滤，并尝试从文案中解析价格（¥xx、xx元）。
+3. **api**：自建或第三方 JSON 接口。
+   - 设置 **data_source** 为 `api`，**api_url** 填接口地址，**api_method** 选 get 或 post。
+   - 接口需返回数组，每项字段可为：`brand`、`title`、`price`、`origin_price`、`category`、`tag`、`activity`、`desc`、`main_image_url`（或中文名：品牌、商品、到手价、原价等，插件会做兼容映射）。
 
-4. 保持函数签名与返回格式不变，即可无缝替换 Mock 数据。
+若你自行维护爬虫或聚合服务，只需对外提供上述结构的 JSON 数组，并在插件中选用 **api** 数据源即可实现准确获取。
+
+自建 API 返回的每项可包含（中英文字段名均可兼容）：`brand`/品牌、`title`/商品/`name`、`price`/到手价/`final_price`、`origin_price`/原价/`original_price`、`category`/分类、`tag`/标签、`activity`/活动、`desc`/推荐/`recommendation`、`main_image_url`/`image`。
 
 ## 八、注意事项
 

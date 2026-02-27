@@ -2,27 +2,41 @@
   "target_groups": {
     "description": "需要推送的 QQ 群聊号列表，例如 [\"123456789\"]",
     "type": "list",
-    "items": {
-      "type": "string"
-    },
+    "items": {"type": "string"},
     "default": []
   },
   "target_brands": {
     "description": "需要监控的快餐品牌，例如 [\"肯德基\", \"麦当劳\", \"德克士\"]",
     "type": "list",
-    "items": {
-      "type": "string"
-    },
-    "default": [
-      "肯德基",
-      "麦当劳",
-      "德克士"
-    ]
+    "items": {"type": "string"},
+    "default": ["肯德基", "麦当劳", "德克士"]
   },
   "schedule_time": {
     "description": "每天定时发送的时间（24 小时制），例如 \"08:00\"",
     "type": "string",
     "default": "08:00"
+  },
+  "data_source": {
+    "description": "数据源类型：mock=内置示例，rss=从 RSS 订阅拉取（如值得买优惠精选），api=从自定义 HTTP API 拉取",
+    "type": "string",
+    "default": "mock",
+    "enum": ["mock", "rss", "api"]
+  },
+  "rss_urls": {
+    "description": "RSS 订阅地址列表（data_source 为 rss 时生效），例如 [\"https://feed.smzdm.com/\"]",
+    "type": "list",
+    "items": {"type": "string"},
+    "default": []
+  },
+  "api_url": {
+    "description": "自定义数据 API 地址（data_source 为 api 时生效），返回 JSON 数组，每项含 brand/title/price 等字段",
+    "type": "string",
+    "default": ""
+  },
+  "api_method": {
+    "description": "请求 API 的 HTTP 方法",
+    "type": "string",
+    "default": "get",
+    "enum": ["get", "post"]
   }
 }
-

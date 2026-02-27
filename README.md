@@ -10,7 +10,7 @@
 - **定时海报推送**：每天固定时间生成“海报级”快餐优惠对比图，并主动推送到指定 QQ 群。
 - **多品牌比价**：支持自定义监控品牌（如：肯德基、麦当劳、德克士等），自动计算优惠力度与最划算推荐。
 - **可视化配置**：通过 AstrBot Web 管理面板配置推送群、品牌列表与推送时间，无需改代码。
-- **Mock 数据可替换**：内置 Mock 数据接口，后续可无缝接入真实爬虫 / API（如：什么值得买）。
+- **多数据源可配置**：支持 `mock`（内置示例）、`rss`（如什么值得买优惠精选）、`api`（自定义 HTTP JSON 接口），在 Web 配置中选择并填写对应 URL 即可准确拉取数据。
 - **执行方式 A（主动触发）**：在群内或私聊发送命令 **`/快餐早报`**，立即生成当日海报并推送到当前会话，无需等到定时时间。
 - **特殊活动主题**：如 **疯狂星期四**（每周四）自动启用 KFC 风格红金配色与专属标题；可选放置背景图 `data/fastfood_deals/backgrounds/crazy_thursday.png` 以使用自定义背景。
 
@@ -127,10 +127,14 @@ FastFoodDeals/
 - 所有文案与播报内容均来自固定模板与优惠数据；
 - 使用 AstrBot 的 `MessageChain` 主动消息接口直接推送。
 
-### 2. 数据获取（Mock，可替换）
+### 2. 数据获取（可配置数据源）
 
-- 核心函数：`async def fetch_today_deals(target_brands: List[str]) -> List[Dict[str, Any]]`
-- 当前为 Mock 数据，返回结构示例：
+- 核心函数：`async def fetch_today_deals(target_brands, data_source=..., rss_urls=..., api_url=..., api_method=...)`
+- 在 Web 配置中设置 **data_source**：
+  - **mock**：内置示例数据，无需外网。
+  - **rss**：从 **rss_urls** 拉取（如 `["https://feed.smzdm.com/"]` 什么值得买优惠精选），按 **target_brands** 关键词过滤（标题/描述含「肯德基」「麦当劳」等才会展示）。
+  - **api**：从 **api_url** 拉取 JSON 数组，每项需含 `brand`、`title`、`price` 等字段（详见下方结构），支持 `api_method` 为 get/post。
+- 返回结构示例（每条）：
 
 ```python
 {
