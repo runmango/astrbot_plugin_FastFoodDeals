@@ -1,8 +1,10 @@
 import asyncio
 import os
 from datetime import datetime
+from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -324,7 +326,7 @@ def _generate_poster_sync(
             fill="#ffffff",
         )
 
-        # 左侧商品主图占位框
+        # 左侧商品主图区域
         img_box_left = margin_x + 30
         img_box_top = card_top + 40
         img_box_right = img_box_left + 200
@@ -339,14 +341,41 @@ def _generate_poster_sync(
             width=3,
         )
 
-        # 在占位框中绘制品牌简称
         brand = str(deal.get("brand", "")).strip()
         brand_short = brand[:2] if brand else "快餐"
         card_accent = cfg.get("card_accent", "#ff6b3b")
 
-        bx = (img_box_left + img_box_right) // 2
-        by = (img_box_top + img_box_bottom) // 2
-        _draw_centered_text(draw, brand_short, (bx, by), price_font, fill=card_accent)
+        # 尝试加载商品主图；失败则回退为品牌简称文字
+        img_url = str(deal.get("main_image_url", "")).strip()
+        pasted_image = False
+        if img_url.startswith("http"):
+            try:
+                resp = httpx.get(img_url, timeout=5.0)
+                resp.raise_for_status()
+                from PIL import Image  # 局部导入，避免顶层依赖
+
+                prod_img = Image.open(BytesIO(resp.content)).convert("RGB")
+                box_w = img_box_right - img_box_left - 16
+                box_h = img_box_bottom - img_box_top - 16
+                pw, ph = prod_img.size
+                if pw > 0 and ph > 0 and box_w > 0 and box_h > 0:
+                    scale = min(box_w / pw, box_h / ph)
+                    new_w = int(pw * scale)
+                    new_h = int(ph * scale)
+                    resample = getattr(Image, "Resampling", None)
+                    resample = resample.LANCZOS if resample else getattr(Image, "LANCZOS", 1)
+                    prod_img = prod_img.resize((new_w, new_h), resample)
+                    offset_x = img_box_left + (box_w - new_w) // 2 + 8
+                    offset_y = img_box_top + (box_h - new_h) // 2 + 8
+                    image.paste(prod_img, (offset_x, offset_y))
+                    pasted_image = True
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[FastFoodDeals] Load product image failed for {img_url}: {e}")
+
+        if not pasted_image:
+            bx = (img_box_left + img_box_right) // 2
+            by = (img_box_top + img_box_bottom) // 2
+            _draw_centered_text(draw, brand_short, (bx, by), price_font, fill=card_accent)
 
         # 右侧文案区域
         text_x = img_box_right + 40
@@ -549,6 +578,10 @@ class FastFoodDeals(Star):
             if b not in ordered_brands:
                 ordered_brands.append(b)
 
+        # 先发一条总的引导语
+        intro_all = "为您奉上今日快餐菜单与活动早报，请查阅。"
+        yield event.plain_result(intro_all)
+
         for brand in ordered_brands:
             brand_deals = brand_map.get(brand)
             if not brand_deals:
@@ -559,8 +592,6 @@ class FastFoodDeals(Star):
                 logger.error(f"[FastFoodDeals] cmd poster error for {brand}: {e}")
                 yield event.plain_result(f"{brand} 今日快餐优惠海报生成失败，请稍后重试。")
                 continue
-            intro = f"为您奉上 {brand} 今日快餐优惠货比三家早报，请查阅。"
-            yield event.plain_result(intro)
             yield event.image_result(poster_path)
 
     def _register_daily_job(self) -> None:
@@ -637,6 +668,7 @@ class FastFoodDeals(Star):
                 ordered_brands.append(b)
 
         any_success = False
+        posters_to_send: List[str] = []
         for brand in ordered_brands:
             brand_deals = brand_map.get(brand)
             if not brand_deals:
@@ -650,8 +682,7 @@ class FastFoodDeals(Star):
                 )
                 continue
 
-            intro_text = f"为您奉上 {brand} 今日快餐优惠货比三家早报，请查阅。"
-            await self._send_image_to_all(poster_path, intro_text)
+            posters_to_send.append(poster_path)
             any_success = True
 
         if not any_success:
@@ -659,6 +690,12 @@ class FastFoodDeals(Star):
             await self._send_text_to_all(
                 "今日快餐优惠海报全部生成失败，但数据已获取成功，请稍后在控制台查看日志。",
             )
+            return
+
+        # 先统一发一句引导语，再依次发图片
+        await self._send_text_to_all("为您奉上今日快餐菜单与活动早报，请查阅。")
+        for poster_path in posters_to_send:
+            await self._send_image_to_all(poster_path)
 
     async def _send_text_to_all(self, text: str) -> None:
         """向所有配置的群聊发送纯文本消息。"""
@@ -675,8 +712,8 @@ class FastFoodDeals(Star):
             except Exception as e:  # noqa: BLE001
                 logger.error(f"[FastFoodDeals] Failed to send text to group {group}: {e}")
 
-    async def _send_image_to_all(self, image_path: str, intro_text: str) -> None:
-        """向所有配置的群聊发送“文字 + 图片”消息。"""
+    async def _send_image_to_all(self, image_path: str, intro_text: Optional[str] = None) -> None:
+        """向所有配置的群聊发送图片，可选附带一条文字说明。"""
         if not self.target_groups:
             return
 
@@ -684,7 +721,10 @@ class FastFoodDeals(Star):
         for group in self.target_groups:
             try:
                 origin = _build_group_origin(group)
-                chain = MessageChain().message(intro_text).file_image(image_path)
+                if intro_text:
+                    chain = MessageChain().message(intro_text).file_image(image_path)
+                else:
+                    chain = MessageChain().file_image(image_path)
                 await self.context.send_message(origin, chain)
                 logger.info(f"[FastFoodDeals] Image poster sent to {origin}")
             except Exception as e:  # noqa: BLE001
