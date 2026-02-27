@@ -7,7 +7,7 @@ from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import MessageChain
+from astrbot.api.event import MessageChain, filter, AstrMessageEvent
 from astrbot.api.message_components import Image as CompImage, Plain
 from astrbot.api.star import Context, Star, register
 
@@ -46,6 +46,18 @@ def _parse_schedule_time(schedule_time: str) -> Tuple[int, int]:
     except Exception as e:  # noqa: BLE001
         logger.error(f"[FastFoodDeals] Invalid schedule_time '{schedule_time}', fallback to 08:00. Error: {e}")
         return 8, 0
+
+
+def get_theme_for_today() -> Optional[str]:
+    """
+    根据当前日期返回今日适用的「特殊活动」主题，用于海报配色与背景。
+    - 周四 -> 疯狂星期四（肯德基）
+    - 可在此扩展：麦当劳麦乐送日、周末狂欢等。
+    """
+    weekday = datetime.now().weekday()  # 0=周一, 3=周四
+    if weekday == 3:
+        return "crazy_thursday"
+    return None
 
 
 def _build_group_origin(group_id: str) -> str:
@@ -126,15 +138,51 @@ def _ensure_directory(path: str) -> None:
         os.makedirs(directory, exist_ok=True)
 
 
+def _text_size(draw, text: str, font) -> Tuple[int, int]:
+    """获取文本绘制尺寸，兼容 Pillow 10+（textsize 已弃用）。"""
+    try:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0], bbox[3] - bbox[1]
+    except AttributeError:
+        return draw.textsize(text, font=font)
+
+
 def _draw_centered_text(draw, text: str, xy: Tuple[int, int], font, fill: str = "#333333") -> None:
     """在指定坐标为中心点绘制文本。"""
     from PIL import ImageFont  # 延迟导入，避免未使用 Pillow 时影响加载
 
     if isinstance(font, str):
         font = ImageFont.truetype(font, 32)
-    w, h = draw.textsize(text, font=font)
+    w, h = _text_size(draw, text, font)
     x, y = xy
     draw.text((x - w // 2, y - h // 2), text, font=font, fill=fill)
+
+
+# 特殊活动主题配色与文案（如疯狂星期四）
+THEME_CONFIG: Dict[str, Dict[str, Any]] = {
+    "crazy_thursday": {
+        "header_color": "#e4002b",
+        "header_subtitle_color": "#ffd700",
+        "title_text": "疯狂星期四 · 今日快餐比价早报",
+        "card_accent": "#e4002b",
+        "card_placeholder_fill": "#ffe6e6",
+        "card_placeholder_outline": "#e4002b",
+        "badge_fill": "#ffd700",
+        "badge_text_color": "#5c3317",
+        "background_image_name": "crazy_thursday.png",
+    },
+}
+DEFAULT_THEME = {
+    "header_color": "#ff6b3b",
+    "header_subtitle_color": "#ffe7d9",
+    "title_text": "今日快餐比价早报",
+    "card_accent": "#ff6b3b",
+    "card_placeholder_fill": "#ffe9dd",
+    "card_placeholder_outline": "#ffb89b",
+    "badge_fill": "#ffdd55",
+    "badge_text_color": "#7a4b00",
+    "background_image_name": None,
+}
 
 
 def _load_font(size: int = 40):
@@ -163,9 +211,13 @@ def _load_font(size: int = 40):
     return ImageFont.load_default()
 
 
-def _generate_poster_sync(deals: List[Dict[str, Any]]) -> str:
+def _generate_poster_sync(
+    deals: List[Dict[str, Any]],
+    theme: Optional[str] = None,
+) -> str:
     """
     使用 Pillow 同步生成“海报级”优惠对比图片。
+    theme: 特殊活动主题，如 "crazy_thursday"（疯狂星期四）使用专属配色与可选背景图。
     返回图片的本地保存路径。
     """
     from PIL import Image, ImageDraw
@@ -173,8 +225,25 @@ def _generate_poster_sync(deals: List[Dict[str, Any]]) -> str:
     # 画布大小（竖版，接近手机海报比例）
     width, height = 1080, 1920
     bg_color = "#f7f7f7"
+    cfg = THEME_CONFIG.get(theme, DEFAULT_THEME) if theme else DEFAULT_THEME
 
     image = Image.new("RGB", (width, height), bg_color)
+
+    # 特殊活动：若有背景图则先绘制（覆盖画布）
+    bg_name = cfg.get("background_image_name")
+    if bg_name:
+        bg_dir = os.path.join("data", "fastfood_deals", "backgrounds")
+        bg_path = os.path.join(bg_dir, bg_name)
+        if os.path.exists(bg_path):
+            try:
+                bg_img = Image.open(bg_path).convert("RGB")
+                resample = getattr(Image, "Resampling", None)
+                resample = resample.LANCZOS if resample else getattr(Image, "LANCZOS", 1)
+                bg_img = bg_img.resize((width, height), resample)
+                image.paste(bg_img, (0, 0))
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[FastFoodDeals] Failed to load background image {bg_path}: {e}")
+
     draw = ImageDraw.Draw(image)
 
     # 字体
@@ -183,18 +252,19 @@ def _generate_poster_sync(deals: List[Dict[str, Any]]) -> str:
     body_font = _load_font(28)
     price_font = _load_font(40)
 
-    # 标题区域
+    # 标题区域（特殊活动使用主题色）
     header_height = 260
-    header_color = "#ff6b3b"
+    header_color = cfg.get("header_color", "#ff6b3b")
+    header_subtitle_color = cfg.get("header_subtitle_color", "#ffe7d9")
     draw.rectangle([(0, 0), (width, header_height)], fill=header_color)
 
-    title_text = "今日快餐比价早报"
+    title_text = cfg.get("title_text", "今日快餐比价早报")
     today_str = datetime.now().strftime("%Y-%m-%d")
     date_text = f"日期：{today_str}"
 
     # 标题居中
     _draw_centered_text(draw, title_text, (width // 2, 90), title_font, fill="#ffffff")
-    _draw_centered_text(draw, date_text, (width // 2, 170), subtitle_font, fill="#ffe7d9")
+    _draw_centered_text(draw, date_text, (width // 2, 170), subtitle_font, fill=header_subtitle_color)
 
     # 内容区域起始位置
     y = header_height + 40
@@ -227,21 +297,24 @@ def _generate_poster_sync(deals: List[Dict[str, Any]]) -> str:
         img_box_top = card_top + 40
         img_box_right = img_box_left + 200
         img_box_bottom = card_bottom - 40
+        ph_fill = cfg.get("card_placeholder_fill", "#ffe9dd")
+        ph_outline = cfg.get("card_placeholder_outline", "#ffb89b")
         draw.rounded_rectangle(
             [(img_box_left, img_box_top), (img_box_right, img_box_bottom)],
             radius=24,
-            fill="#ffe9dd",
-            outline="#ffb89b",
+            fill=ph_fill,
+            outline=ph_outline,
             width=3,
         )
 
         # 在占位框中绘制品牌简称
         brand = str(deal.get("brand", "")).strip()
         brand_short = brand[:2] if brand else "快餐"
+        card_accent = cfg.get("card_accent", "#ff6b3b")
 
         bx = (img_box_left + img_box_right) // 2
         by = (img_box_top + img_box_bottom) // 2
-        _draw_centered_text(draw, brand_short, (bx, by), price_font, fill="#ff6b3b")
+        _draw_centered_text(draw, brand_short, (bx, by), price_font, fill=card_accent)
 
         # 右侧文案区域
         text_x = img_box_right + 40
@@ -265,7 +338,7 @@ def _generate_poster_sync(deals: List[Dict[str, Any]]) -> str:
 
         # 原价中间画删除线
         op_text = f"原价：¥{original_price:.1f}"
-        op_w, op_h = draw.textsize(op_text, font=body_font)
+        op_w, op_h = _text_size(draw, op_text, body_font)
         draw.line(
             [(text_x, price_y + op_h // 2), (text_x + op_w, price_y + op_h // 2)],
             fill="#bbbbbb",
@@ -285,7 +358,7 @@ def _generate_poster_sync(deals: List[Dict[str, Any]]) -> str:
             (text_x, discount_y),
             f"优惠力度：约 {discount_percent:.1f}%",
             font=body_font,
-            fill="#ff6b3b",
+            fill=card_accent,
         )
 
         # 推荐语
@@ -301,23 +374,25 @@ def _generate_poster_sync(deals: List[Dict[str, Any]]) -> str:
         # 最划算高亮标记
         if best_deal_brand and brand == best_deal_brand:
             badge_text = "今日最划算"
-            badge_w, badge_h = draw.textsize(badge_text, font=body_font)
+            badge_w, badge_h = _text_size(draw, badge_text, body_font)
             badge_padding_x = 18
             badge_padding_y = 10
             badge_left = width - margin_x - badge_w - badge_padding_x * 2
             badge_top = card_top + 26
             badge_right = width - margin_x - 26
             badge_bottom = badge_top + badge_h + badge_padding_y * 2
+            b_fill = cfg.get("badge_fill", "#ffdd55")
+            b_text_color = cfg.get("badge_text_color", "#7a4b00")
             draw.rounded_rectangle(
                 [(badge_left, badge_top), (badge_right, badge_bottom)],
                 radius=18,
-                fill="#ffdd55",
+                fill=b_fill,
             )
             draw.text(
                 (badge_left + badge_padding_x, badge_top + badge_padding_y),
                 badge_text,
                 font=body_font,
-                fill="#7a4b00",
+                fill=b_text_color,
             )
 
         y = card_bottom + card_gap
@@ -325,7 +400,7 @@ def _generate_poster_sync(deals: List[Dict[str, Any]]) -> str:
     # 底部提示
     footer_text = "提示：以上价格与活动以各品牌官方实际为准，仅供参考。"
     footer_y = height - 80
-    fw, fh = draw.textsize(footer_text, font=body_font)
+    fw, fh = _text_size(draw, footer_text, body_font)
     draw.text(
         ((width - fw) // 2, footer_y),
         footer_text,
@@ -344,12 +419,16 @@ def _generate_poster_sync(deals: List[Dict[str, Any]]) -> str:
     return out_path
 
 
-async def generate_poster(deals: List[Dict[str, Any]]) -> str:
+async def generate_poster(
+    deals: List[Dict[str, Any]],
+    theme: Optional[str] = None,
+) -> str:
     """
     异步封装的海报生成函数。
     内部使用 asyncio.to_thread 调用同步的 Pillow 绘制逻辑，避免阻塞事件循环。
+    theme: 特殊活动主题，如 "crazy_thursday"。
     """
-    return await asyncio.to_thread(_generate_poster_sync, deals)
+    return await asyncio.to_thread(_generate_poster_sync, deals, theme)
 
 
 @register(
@@ -391,6 +470,29 @@ class FastFoodDeals(Star):
 
         # 注册定时任务
         self._register_daily_job()
+
+    @filter.command("快餐早报")
+    async def cmd_fastfood_report(self, event: AstrMessageEvent):
+        """主动触发：获取今日快餐优惠比价早报并推送到当前会话（执行方式 A）。"""
+        try:
+            deals = await fetch_today_deals(self.target_brands)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[FastFoodDeals] cmd fetch deals error: {e}")
+            yield event.plain_result("今日快餐优惠数据获取失败，请稍后重试。")
+            return
+        if not deals:
+            yield event.plain_result("今日暂无监控到的快餐优惠活动。")
+            return
+        theme = get_theme_for_today()
+        try:
+            poster_path = await generate_poster(deals, theme=theme)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"[FastFoodDeals] cmd poster error: {e}")
+            yield event.plain_result("今日快餐优惠海报生成失败，请稍后重试。")
+            return
+        intro = "为您奉上今日快餐优惠货比三家早报，请查阅。"
+        yield event.plain_result(intro)
+        yield event.image_result(poster_path)
 
     def _register_daily_job(self) -> None:
         """向全局 Scheduler 注册每日定时任务。"""
@@ -449,8 +551,9 @@ class FastFoodDeals(Star):
             await self._send_text_to_all("今日暂无监控到的快餐优惠活动。")
             return
 
+        theme = get_theme_for_today()
         try:
-            poster_path = await generate_poster(deals)
+            poster_path = await generate_poster(deals, theme=theme)
         except Exception as e:  # noqa: BLE001
             logger.error(f"[FastFoodDeals] Failed to generate poster: {e}")
             # 海报生成失败时，发送纯文本兜底

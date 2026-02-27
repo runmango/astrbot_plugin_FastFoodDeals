@@ -11,6 +11,8 @@
 - **多品牌比价**：支持自定义监控品牌（如：肯德基、麦当劳、德克士等），自动计算优惠力度与最划算推荐。
 - **可视化配置**：通过 AstrBot Web 管理面板配置推送群、品牌列表与推送时间，无需改代码。
 - **Mock 数据可替换**：内置 Mock 数据接口，后续可无缝接入真实爬虫 / API（如：什么值得买）。
+- **执行方式 A（主动触发）**：在群内或私聊发送命令 **`/快餐早报`**，立即生成当日海报并推送到当前会话，无需等到定时时间。
+- **特殊活动主题**：如 **疯狂星期四**（每周四）自动启用 KFC 风格红金配色与专属标题；可选放置背景图 `data/fastfood_deals/backgrounds/crazy_thursday.png` 以使用自定义背景。
 
 ---
 
@@ -18,10 +20,11 @@
 
 ```text
 FastFoodDeals/
-├─ main.py               # 插件主入口，Star 类、定时任务、消息推送、海报生成
+├─ main.py               # 插件主入口，Star 类、定时任务、命令触发、海报生成
 ├─ _conf_schema.json     # AstrBot Web 配置 Schema
 ├─ metadata.yaml         # 插件元信息（id/name/version/适配平台）
 ├─ requirements.txt      # 插件依赖
+├─ data/fastfood_deals/backgrounds/  # 特殊活动背景图（如 crazy_thursday.png）
 └─ docx/
    └─ FastFoodDeals使用说明.md  # 详细中文说明，可转为 .docx
 ```
@@ -145,8 +148,17 @@ FastFoodDeals/
   - 页脚免责声明。
 - 输出路径（示例）：  
   `data/fastfood_deals/fastfood_deals_YYYYMMDD.png`
+- **特殊活动**：当 `get_theme_for_today()` 返回主题（如周四的 `crazy_thursday`）时，自动使用该主题的配色与标题；若在 `data/fastfood_deals/backgrounds/` 下放置同名背景图（如 `crazy_thursday.png`），会先铺满背景再绘制内容。
 
-### 4. 定时任务 & 主动发送
+### 4. 执行方式 A：主动命令触发
+
+在任意已接入的群或私聊中发送：
+
+- **`/快餐早报`**
+
+机器人会立即拉取当日优惠数据、根据是否周四等应用对应主题（如疯狂星期四）、生成海报，并在**当前会话**中回复一句引导语 + 海报图片。无需等到定时推送时间。
+
+### 5. 定时任务 & 主动发送
 
 - 使用 `apscheduler` 的 `AsyncIOScheduler` 创建每日定时任务；
 - 从配置中解析 `schedule_time`（`HH:MM`）为 CronTrigger；
