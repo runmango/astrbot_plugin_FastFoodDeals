@@ -7,4 +7,5 @@ description: "每天定时生成快餐优惠比价海报，并推送到指定 QQ
 support_platforms:
   - aiocqhttp
 astrbot_version: ">=4.16,<5"
+repo: "https://github.com/runmango/astrbot_plugin_FastFoodDeals.git"
 

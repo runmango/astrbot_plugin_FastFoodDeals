@@ -41,12 +41,6 @@ FastFoodDeals/
 
 ---
 
-## 🌐 仓库地址
-
-- GitHub：`https://github.com/runmango/astrbot_plugin_FastFoodDeals`
-
----
-
 ## 🚀 安装
 
 1. **拷贝插件目录**
